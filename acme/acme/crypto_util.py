@@ -19,7 +19,7 @@ from typing import Union
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import dsa, rsa, ec, ed25519, ed448, types
+from cryptography.hazmat.primitives.asymmetric import dsa, rsa, ec, ed25519, ed448
 import josepy as jose
 from OpenSSL import crypto
 from OpenSSL import SSL
@@ -227,13 +227,27 @@ def probe_sni(name: bytes, host: bytes, port: int = 443, timeout: int = 300,  # 
     return cert
 
 
-# Annoyingly, despite cryptography having an equivalent Union[] type containing
-# these in cryptography.hazmat.primitives.asymmetric.types, we can't use it in
-# an isinstance expression without causing false mypy errors. So recreate the
-# type collection as a tuple here.
+# Annoyingly, we can't directly use cryptography's equivalent Union[] type for
+# our type signatures since they're only public API in 40.0.x+, which is too new
+# for some Certbot # distribution channels. Once we bump our oldest cryptography
+# version past 40.0.x, usage of this type can be replaced with:
+# cryptography.hazmat.primitives.asymmetric.types.CertificateIssuerPrivateKeyTypes
+CertificateIssuerPrivateKeyTypes = Union[
+    dsa.DSAPrivateKey,
+    rsa.RSAPrivateKey,
+    ec.EllipticCurvePrivateKey,
+    ed25519.Ed25519PrivateKey,
+    ed448.Ed448PrivateKey,
+]
+# Even *more* annoyingly, due to a mypy bug, we can't use Union[] types in
+# isinstance expressions without causing false mypy errors. So we have to
+# recreate the type collection as a tuple here. And no, typing.get_args doesn't
+# work due to another mypy bug.
 #
-# mypy issue: https://github.com/python/mypy/issues/17680
-CertificateIssuerPrivateKeyTypes = (
+# mypy issues:
+#  * https://github.com/python/mypy/issues/17680
+#  * https://github.com/python/mypy/issues/15106
+CertificateIssuerPrivateKeyTypesTpl = (
     dsa.DSAPrivateKey,
     rsa.RSAPrivateKey,
     ec.EllipticCurvePrivateKey,
@@ -260,7 +274,7 @@ def make_csr(
     :returns: buffer PEM-encoded Certificate Signing Request.
     """
     private_key = serialization.load_pem_private_key(private_key_pem, password=None)
-    if not isinstance(private_key, CertificateIssuerPrivateKeyTypes):
+    if not isinstance(private_key, CertificateIssuerPrivateKeyTypesTpl):
         raise ValueError(f"Invalid private key type: {type(private_key)}")
     if domains is None:
         domains = []
@@ -383,7 +397,7 @@ def _pyopenssl_extract_san_list_raw(cert_or_req: Union[crypto.X509, crypto.X509R
     return sans_parts
 
 
-def make_self_signed_cert(private_key: types.CertificateIssuerPrivateKeyTypes,
+def make_self_signed_cert(private_key: CertificateIssuerPrivateKeyTypes,
                           domains: Optional[List[str]] = None,
                           not_before: Optional[int] = None,
                           validity: int = (7 * 24 * 60 * 60), force_san: bool = True,
@@ -393,8 +407,7 @@ def make_self_signed_cert(private_key: types.CertificateIssuerPrivateKeyTypes,
                           ) -> x509.Certificate:
     """Generate new self-signed certificate.
     :type domains: `list` of `str`
-    :param buffer private_key_pem: One of
-        `cryptography.hazmat.primitives.asymmetric.types.CertificateIssuerPrivateKeyTypes`
+    :param buffer private_key_pem: One of `CertificateIssuerPrivateKeyTypes`
     :param bool force_san:
     :param extensions: List of additional extensions to include in the cert.
     :type extensions: `list` of `x509.Extension[x509.ExtensionType]`
